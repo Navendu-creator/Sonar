@@ -5,7 +5,9 @@ SonarQube Community + PostgreSQL 15, deployed with Kustomize.
 ```
 k8s/
 ├── kind/kind-config.yaml      # local single-node cluster ("sonar")
-└── sonarqube/                 # namespace, secret, postgres, sonarqube
+├── sonarqube/                 # namespace, secret, postgres, sonarqube
+└── argocd/                    # Argo CD v3.5.5 install
+    └── apps/sonarqube.yaml    # Argo CD Application that deploys k8s/sonarqube
 ```
 
 ## Run locally with kind
@@ -53,6 +55,34 @@ docker run --rm --network host \
 `--network host` lets the scanner container reach the port-forward on localhost.
 Results appear in the UI once the background task finishes.
 
+## Argo CD (GitOps)
+
+Argo CD watches `k8s/sonarqube` on GitHub `main` and keeps the cluster in sync
+with it.
+
+```bash
+# 1. Install Argo CD (server-side apply is required: its CRDs are too large otherwise)
+kubectl apply --server-side --force-conflicts -k k8s/argocd
+kubectl -n argocd rollout status deploy/argocd-server
+
+# 2. Open the UI at https://localhost:8080 (self-signed cert: accept the browser warning)
+kubectl -n argocd port-forward svc/argocd-server 8080:443
+
+# 3. Log in as "admin" with this generated password
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+
+# 4. Hand SonarQube over to Argo CD (only after your changes are pushed to main)
+kubectl apply -f k8s/argocd/apps/sonarqube.yaml
+```
+
+Once the Application exists, **git is the source of truth**. Change the
+manifests, commit, and push. Argo CD applies the change within about 3 minutes.
+Manual `kubectl apply`/`edit` on SonarQube resources gets reverted (`selfHeal`),
+and anything deleted from git gets deleted from the cluster (`prune`).
+
+After logging in, change the admin password (User Info → Update Password) and
+then `kubectl -n argocd delete secret argocd-initial-admin-secret`.
+
 ## Day-to-day
 
 | Task | Command |
@@ -70,7 +100,9 @@ restarts and redeploys.
 ## Tear down
 
 ```bash
+kubectl delete -f k8s/argocd/apps/sonarqube.yaml   # if Argo CD manages it (stops syncing; leaves resources)
 kubectl delete -k k8s/sonarqube     # removes the app AND its data volumes
+kubectl delete -k k8s/argocd        # removes Argo CD
 kind delete cluster --name sonar    # removes the whole local cluster
 ```
 
