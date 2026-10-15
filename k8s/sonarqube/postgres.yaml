@@ -17,7 +17,16 @@ metadata:
   name: postgres
   namespace: sonarqube
 spec:
-  replicas: 2
+  # Must stay at 1: both replicas would mount the same ReadWriteOnce volume
+  # and run independent postgres servers on one data directory.
+  # Real HA needs a replication operator (e.g. CloudNativePG).
+  replicas: 1
+
+  # RollingUpdate deadlocks on a ReadWriteOnce volume (new pod can't attach
+  # until the old one is gone), so stop the old pod first.
+  strategy:
+    type: Recreate
+
   selector:
     matchLabels:
       app: postgres
@@ -53,6 +62,31 @@ spec:
                 secretKeyRef:
                   name: postgres-secret
                   key: POSTGRES_PASSWORD
+
+            # EBS volumes contain lost+found at the root, which makes initdb
+            # refuse the mount point; use a subdirectory instead.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+
+            limits:
+              memory: "1Gi"
 
           volumeMounts:
             - name: postgres-storage

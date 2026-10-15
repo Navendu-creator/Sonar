@@ -19,6 +19,10 @@ metadata:
 spec:
   replicas: 1
 
+  # ReadWriteOnce volume: the old pod must release it before the new one starts.
+  strategy:
+    type: Recreate
+
   selector:
     matchLabels:
       app: sonarqube
@@ -29,15 +33,22 @@ spec:
         app: sonarqube
 
     spec:
+      # SonarQube runs as uid 1000; make the volume (and its subPath dirs) writable.
+      securityContext:
+        fsGroup: 1000
+
       initContainers:
         - name: init-sysctl
           image: busybox:1.36
           command:
             - sh
             - -c
+            # These sysctls are node-wide (and host-wide on kind), so only
+            # ever raise them; never lower a higher value already set.
             - |
-              sysctl -w vm.max_map_count=524288
-              sysctl -w fs.file-max=131072
+              [ "$(sysctl -n vm.max_map_count)" -lt 524288 ] && sysctl -w vm.max_map_count=524288
+              [ "$(sysctl -n fs.file-max)" -lt 131072 ] && sysctl -w fs.file-max=131072
+              exit 0
           securityContext:
             privileged: true
 
@@ -64,18 +75,57 @@ spec:
                   name: postgres-secret
                   key: POSTGRES_PASSWORD
 
+          # Web, compute engine and embedded Elasticsearch together need more
+          # than 2Gi; at that limit the pod gets OOMKilled under analysis load.
           resources:
             requests:
-              memory: "1Gi"
+              memory: "2Gi"
               cpu: "500m"
 
             limits:
-              memory: "2Gi"
-              cpu: "1"
+              memory: "4Gi"
+              cpu: "2"
 
+          # First boot runs DB migrations and builds ES indexes; allow up to 10 min.
+          startupProbe:
+            httpGet:
+              path: /api/system/status
+              port: 9000
+            periodSeconds: 10
+            failureThreshold: 60
+
+          # /api/system/status returns 200 while still STARTING or migrating,
+          # so only report ready once it actually says UP.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - curl -sf http://localhost:9000/api/system/status | grep -q '"status":"UP"'
+            periodSeconds: 15
+            timeoutSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /api/system/status
+              port: 9000
+            periodSeconds: 30
+            failureThreshold: 6
+
+          # One volume, split by subPath, so installed plugins and logs
+          # survive pod restarts along with the data.
           volumeMounts:
             - name: sonarqube-storage
               mountPath: /opt/sonarqube/data
+              subPath: data
+
+            - name: sonarqube-storage
+              mountPath: /opt/sonarqube/extensions
+              subPath: extensions
+
+            - name: sonarqube-storage
+              mountPath: /opt/sonarqube/logs
+              subPath: logs
 
       volumes:
         - name: sonarqube-storage
