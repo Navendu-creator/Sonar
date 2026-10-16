@@ -52,9 +52,7 @@ spec:
           securityContext:
             privileged: true
 
-      containers:
-        - name: sonarqube
-          image: sonarqube:community
+  
 
           ports:
             - containerPort: 9000
