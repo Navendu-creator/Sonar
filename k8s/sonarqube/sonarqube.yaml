@@ -52,7 +52,7 @@ spec:
           securityContext:
             privileged: true
 
-  
+     
 
           ports:
             - containerPort: 9000
