@@ -79,11 +79,11 @@ spec:
           # than 2Gi; at that limit the pod gets OOMKilled under analysis load.
           resources:
             requests:
-              memory: "2Gi"
+              memory: "512Mi"
               cpu: "500m"
 
             limits:
-              memory: "4Gi"
+              memory: "512Mi"
               cpu: "2"
 
           # First boot runs DB migrations and builds ES indexes; allow up to 10 min.
