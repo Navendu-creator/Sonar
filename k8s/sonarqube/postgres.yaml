@@ -13,7 +13,10 @@ spec:
 ---
 apiVersion: apps/v1
 
-
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: sonarqube
 spec:
   # Must stay at 1: both replicas would mount the same ReadWriteOnce volume
   # and run independent postgres servers on one data directory.
