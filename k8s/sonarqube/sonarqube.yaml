@@ -15,7 +15,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sonarqube
-  namespace: sonarqube
+  namespace: 
 spec:
   replicas: 1
 
