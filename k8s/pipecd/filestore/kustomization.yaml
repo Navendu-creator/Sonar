@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# PipeCD filestore. Update with: kubectl apply -k k8s/pipecd/filestore
+namespace: pipecd
+
+resources:
+  - service.yaml
+  - statefulset.yaml
+  - network-policy.yaml
+
+# Upgrade SeaweedFS by changing newTag (releases: github.com/seaweedfs/seaweedfs/releases).
+images:
+  - name: chrislusf/seaweedfs
+    newTag: "4.47"

@@ -1,0 +1,21 @@
+# Piped configuration.
+# Reference: https://pipecd.dev/docs-v0.58.x/user-guide/managing-piped/configuration-reference/
+#
+# __PROJECT_ID__ and __PIPED_ID__ are filled in by install.sh. The piped key is
+# mounted from the Secret the chart creates, at /etc/piped-secret/piped-key.
+apiVersion: pipecd.dev/v1beta1
+kind: Piped
+spec:
+  projectID: __PROJECT_ID__
+  pipedID: __PIPED_ID__
+  pipedKeyFile: /etc/piped-secret/piped-key
+  # gRPC address of the control plane gateway ("host:port"). Plaintext until
+  # TLS is set up, which is why values.yaml sets args.insecure.
+  apiAddress: pipecd:8080
+  # This repository is public, so HTTPS needs no credentials. For a private
+  # repository, switch to an SSH remote and set git.sshKeyFile.
+  repositories:
+    - repoId: sonar
+      remote: https://github.com/Navendu-creator/Sonar.git
+      branch: main
+  syncInterval: 1m

@@ -1,0 +1,69 @@
+# S3-compatible object storage (SeaweedFS). Stands in for an S3/GCS bucket on
+# the local cluster. PipeCD talks to it with its MINIO filestore type, which
+# works with any S3-compatible endpoint. (MinIO itself no longer publishes
+# container images.) S3 credentials come from the pipecd-filestore Secret
+# created by ../secrets/create.sh.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pipecd-filestore
+  labels:
+    app.kubernetes.io/name: pipecd-filestore
+    app.kubernetes.io/part-of: pipecd
+spec:
+  replicas: 1
+  serviceName: pipecd-filestore
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pipecd-filestore
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pipecd-filestore
+        app.kubernetes.io/part-of: pipecd
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs   # tag is set in kustomization.yaml
+          # Master, volume, filer and S3 gateway in one process. Internal traffic
+          # stays on loopback; only the S3 port is reachable through the Service.
+          args:
+            - server
+            - -dir=/data
+            - -ip=127.0.0.1
+            - -ip.bind=0.0.0.0
+            - -master.volumeSizeLimitMB=1024
+            - -s3
+            - -s3.port=8333
+            - -s3.config=/etc/seaweedfs/s3.json
+          ports:
+            - name: s3
+              containerPort: 8333
+          readinessProbe:
+            tcpSocket: { port: s3 }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: s3 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: s3-config
+              mountPath: /etc/seaweedfs
+              readOnly: true
+      volumes:
+        - name: s3-config
+          secret:
+            secretName: pipecd-filestore
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

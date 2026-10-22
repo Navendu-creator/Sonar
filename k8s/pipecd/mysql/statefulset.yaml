@@ -1,0 +1,71 @@
+# MySQL 8 (PipeCD requires v8 features). Stands in for a managed database
+# (RDS / Cloud SQL) on the local cluster. Credentials come from the
+# pipecd-mysql Secret created by ../secrets/create.sh.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pipecd-mysql
+  labels:
+    app.kubernetes.io/name: pipecd-mysql
+    app.kubernetes.io/part-of: pipecd
+spec:
+  # Must stay at 1: replicas would not replicate, they would be separate databases.
+  replicas: 1
+  serviceName: pipecd-mysql
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pipecd-mysql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pipecd-mysql
+        app.kubernetes.io/part-of: pipecd
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: mysql
+          image: mysql   # tag is set in kustomization.yaml
+          env:
+            - name: MYSQL_DATABASE
+              value: pipecd
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: pipecd-mysql, key: root-password }
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef: { name: pipecd-mysql, key: username }
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: pipecd-mysql, key: password }
+          ports:
+            - name: mysql
+              containerPort: 3306
+          startupProbe:
+            exec:
+              command: ["sh", "-c", 'mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD"']
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", 'mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD"']
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", 'mysql -h 127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -e "SELECT 1" pipecd']
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 1Gi }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

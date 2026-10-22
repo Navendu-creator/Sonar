@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pipecd-filestore
+  labels:
+    app.kubernetes.io/name: pipecd-filestore
+    app.kubernetes.io/part-of: pipecd
+spec:
+  selector:
+    app.kubernetes.io/name: pipecd-filestore
+  ports:
+    - name: s3
+      port: 8333
+      targetPort: s3

@@ -1,0 +1,18 @@
+# Only control plane pods may reach the Redis cache the chart deploys.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pipecd-cache
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pipecd
+      app.kubernetes.io/component: cache
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pipecd
+      ports:
+        - port: 6379

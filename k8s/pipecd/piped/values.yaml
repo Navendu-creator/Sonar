@@ -1,0 +1,19 @@
+# Helm values for oci://ghcr.io/pipe-cd/chart/piped (v0.58.0).
+# Full list: https://github.com/pipe-cd/pipecd/blob/v0.58.0/manifests/piped/values.yaml
+# The Piped config and key are passed separately with --set-file.
+
+args:
+  # The control plane isn't behind TLS yet. Set to false once it is.
+  insecure: true
+  logEncoding: json
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+
+# Cluster-wide mode: piped can deploy to any namespace in this cluster.
+# For namespaced mode, set rbac.scope: namespace and
+# args.enableDefaultKubernetesCloudProvider: false (see the install docs).
+rbac:
+  create: true
+  scope: cluster

@@ -1,0 +1,18 @@
+# Only the PipeCD control plane (pods the Helm chart labels
+# app.kubernetes.io/name: pipecd) may connect to the S3 endpoint.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pipecd-filestore
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pipecd-filestore
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pipecd
+      ports:
+        - port: 8333

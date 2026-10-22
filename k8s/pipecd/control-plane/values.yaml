@@ -1,0 +1,56 @@
+# Helm values for oci://ghcr.io/pipe-cd/chart/pipecd (v0.58.0).
+# Full list: https://github.com/pipe-cd/pipecd/blob/v0.58.0/manifests/pipecd/values.yaml
+# The ControlPlane config is passed separately with --set-file config.data.
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Turn on once an ingress controller and TLS certificate exist, and then set
+# server.args.secureCookie to true.
+ingress:
+  enabled: false
+
+gateway:
+  replicasCount: 2
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+server:
+  replicasCount: 2
+  args:
+    # Must become true as soon as the UI is served over HTTPS.
+    secureCookie: false
+    logEncoding: json
+    logLevel: info
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+
+cache:
+  # The chart default (redis 5.0.5, 2019) is long out of support.
+  imageTag: 7.4.6-alpine
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+ops:
+  args:
+    logEncoding: json
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+# The config file is rendered by install.sh and passed with --set-file.
+config:
+  create: true
+
+# Created by ../secrets/create.sh; the chart only mounts it.
+secret:
+  create: false
+  name: pipecd-secrets
+
+# Never in production: quickstart runs throwaway MySQL/MinIO without volumes.
+quickstart:
+  enabled: false

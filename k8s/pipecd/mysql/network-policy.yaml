@@ -1,0 +1,18 @@
+# Only the PipeCD control plane (pods the Helm chart labels
+# app.kubernetes.io/name: pipecd) may connect to MySQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pipecd-mysql
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pipecd-mysql
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pipecd
+      ports:
+        - port: 3306

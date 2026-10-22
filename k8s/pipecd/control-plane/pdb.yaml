@@ -1,0 +1,27 @@
+# Keep at least one server and one gateway running during node drains and
+# cluster upgrades. The chart doesn't ship PodDisruptionBudgets.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pipecd-server
+  namespace: pipecd
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pipecd
+      app.kubernetes.io/instance: pipecd
+      app.kubernetes.io/component: server
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pipecd-gateway
+  namespace: pipecd
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pipecd
+      app.kubernetes.io/instance: pipecd
+      app.kubernetes.io/component: gateway

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# PipeCD datastore. Update with: kubectl apply -k k8s/pipecd/mysql
+namespace: pipecd
+
+resources:
+  - service.yaml
+  - statefulset.yaml
+  - network-policy.yaml
+
+# Upgrade MySQL by changing newTag. Stay on 8.x: PipeCD requires MySQL 8.
+images:
+  - name: mysql
+    newTag: 8.4.10

@@ -6,8 +6,9 @@ SonarQube Community + PostgreSQL 15, deployed with Kustomize.
 k8s/
 ├── kind/kind-config.yaml      # local single-node cluster ("sonar")
 ├── sonarqube/                 # namespace, secret, postgres, sonarqube
-└── argocd/                    # Argo CD v3.5.5 install
-    └── apps/sonarqube.yaml    # Argo CD Application that deploys k8s/sonarqube
+├── argocd/                    # Argo CD v3.5.5 install
+│   └── apps/sonarqube.yaml    # Argo CD Application that deploys k8s/sonarqube
+└── pipecd/                    # PipeCD production setup (see k8s/pipecd/README.md)
 ```
 
 ## Run locally with kind
