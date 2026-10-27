@@ -1,0 +1,14 @@
+# Deploys k8s/sonarqube with PipeCD (piped "kind-sonar", repo "sonar", branch main).
+# piped builds this folder with Kustomize because kustomization.yaml is here.
+# Reference: https://pipecd.dev/docs-v0.58.x/user-guide/configuration-reference/
+apiVersion: pipecd.dev/v1beta1
+kind: KubernetesApp
+spec:
+  name: sonarqube
+  labels:
+    env: production
+  description: SonarQube with Postgres
+  # Quick sync only: a canary or blue-green would run two SonarQube pods on the
+  # same ReadWriteOnce volume and database.
+  quickSync:
+    prune: true # delete resources removed from git
