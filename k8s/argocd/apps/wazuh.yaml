@@ -1,0 +1,34 @@
+# Deploys k8s/wazuh from GitHub main to the EKS cluster "dev-cluster" and keeps
+# it in sync. Register the cluster first (../clusters/dev-cluster/register.sh),
+# and push k8s/wazuh before applying this: Argo CD deploys what is on GitHub.
+#
+# The certificates and passwords are not in git: secrets/create.sh creates
+# those Secrets directly on EKS, and Argo CD leaves them alone. Until they
+# exist, the Wazuh pods wait in ContainerCreating (see k8s/wazuh/README.md).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: wazuh
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Navendu-creator/Sonar.git
+    targetRevision: main
+    path: k8s/wazuh
+
+  destination:
+    name: dev-cluster # the cluster Secret register.sh creates
+    namespace: wazuh
+
+  syncPolicy:
+    automated:
+      prune: true     # delete resources removed from git
+      selfHeal: true  # revert manual kubectl changes
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

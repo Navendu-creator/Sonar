@@ -1,0 +1,51 @@
+# Not deployed yet: dashboard-nlb.yaml serves the dashboard until there is a
+# domain and an ACM certificate. To switch, list this file instead of
+# dashboard-nlb.yaml in ../kustomization.yaml.
+#
+# Wazuh dashboard behind an internet-facing ALB, created by the AWS Load
+# Balancer Controller. The ALB terminates TLS with an ACM certificate, then
+# re-encrypts to the dashboard, which only speaks HTTPS (the ALB does not
+# verify the dashboard's internal certificate).
+#
+# Before applying, set (see README.md):
+#   - certificate-arn: an ACM certificate covering the host below
+#   - inbound-cidrs:   the networks allowed to open the dashboard
+#   - host:            the DNS name users open, a Route 53 alias to the ALB
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wazuh-dashboard
+  namespace: wazuh
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    # Route straight to the pod IPs (requires the VPC CNI, the EKS default).
+    alb.ingress.kubernetes.io/target-type: ip
+
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT_ID:certificate/CHANGE-ME
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+
+    # This is the SIEM console: open it only to your office / VPN ranges.
+    alb.ingress.kubernetes.io/inbound-cidrs: 0.0.0.0/0
+
+    alb.ingress.kubernetes.io/backend-protocol: HTTPS
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTPS
+    alb.ingress.kubernetes.io/healthcheck-path: /app/login
+    alb.ingress.kubernetes.io/success-codes: "200,302"
+
+    # Long-running dashboard queries; the ALB default is 60s.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
+spec:
+  ingressClassName: alb
+  rules:
+    - host: wazuh.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard
+                port:
+                  number: 443

@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Wazuh 5 on EKS, adapted from wazuh/wazuh-kubernetes (envs/eks).
+# Secrets first (secrets/create.sh), then: kubectl apply -k k8s/wazuh
+# See README.md for the prerequisites and the values to fill in.
+namespace: wazuh
+
+resources:
+  - namespace.yaml
+  - storage-class.yaml
+  - network-policy.yaml
+
+  - indexer/service.yaml
+  - indexer/statefulset.yaml
+  - indexer/pdb.yaml
+  - indexer/network-policy.yaml
+
+  - manager/services.yaml
+  - manager/master-statefulset.yaml
+  - manager/worker-statefulset.yaml
+  - manager/pdb.yaml
+  - manager/network-policy.yaml
+
+  - dashboard/pvc.yaml
+  - dashboard/deployment.yaml
+  - dashboard/service.yaml
+  - dashboard/network-policy.yaml
+
+  # Reached on the load balancers' AWS DNS names for now. With a domain and an
+  # ACM certificate, swap dashboard-nlb.yaml for dashboard-ingress.yaml (ALB).
+  - ingress/dashboard-nlb.yaml
+  - ingress/agents-nlb.yaml
+  - ingress/network-policy.yaml
+
+# All three components must run the same version. Bump the three tags together,
+# and read the upgrade notes first: https://github.com/wazuh/wazuh-kubernetes/releases
+# 5.0.0-rc1 is the newest 5.x build; move to 5.0.0 once it is released.
+images:
+  - name: wazuh/wazuh-indexer
+    newTag: 5.0.0-rc1
+  - name: wazuh/wazuh-manager
+    newTag: 5.0.0-rc1
+  - name: wazuh/wazuh-dashboard
+    newTag: 5.0.0-rc1

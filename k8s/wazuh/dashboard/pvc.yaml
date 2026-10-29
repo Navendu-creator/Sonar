@@ -1,0 +1,13 @@
+# Holds the dashboard's config directory (opensearch_dashboards.yml and the
+# keystore with the passwords it was first started with).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wazuh-dashboard-config
+  namespace: wazuh
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: wazuh-storage
+  resources:
+    requests:
+      storage: 1Gi

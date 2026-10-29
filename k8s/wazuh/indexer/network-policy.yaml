@@ -1,0 +1,55 @@
+# The REST API (9200) is for the dashboard and the managers; the transport
+# port (9300) is only for the indexer nodes themselves.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: indexer-ingress
+  namespace: wazuh
+spec:
+  podSelector:
+    matchLabels:
+      app: wazuh-indexer
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wazuh-dashboard
+        - podSelector:
+            matchLabels:
+              app: wazuh-manager
+        - podSelector:
+            matchLabels:
+              app: wazuh-indexer
+      ports:
+        - protocol: TCP
+          port: 9200
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wazuh-indexer
+      ports:
+        - protocol: TCP
+          port: 9300
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: indexer-egress
+  namespace: wazuh
+spec:
+  podSelector:
+    matchLabels:
+      app: wazuh-indexer
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: wazuh-indexer
+      ports:
+        - protocol: TCP
+          port: 9200
+        - protocol: TCP
+          port: 9300

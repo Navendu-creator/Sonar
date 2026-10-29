@@ -1,0 +1,16 @@
+# Encrypted gp3 EBS volumes through the EBS CSI driver (the in-tree
+# kubernetes.io/aws-ebs provisioner upstream uses is gone since Kubernetes 1.27).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: wazuh-storage
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+  fsType: ext4
+# EBS volumes live in one AZ: wait for the pod to be scheduled before creating it.
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+# Keep the alert history if a PersistentVolumeClaim is deleted by mistake.
+reclaimPolicy: Retain

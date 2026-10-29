@@ -1,0 +1,235 @@
+# Wazuh manager master: coordinates the workers and serves the Wazuh API.
+# It also accepts 5.x agents on 1517, like the workers.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-manager-master
+  namespace: wazuh
+spec:
+  # Must stay at 1: a Wazuh cluster has exactly one master.
+  replicas: 1
+  serviceName: wazuh-cluster
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: wazuh-manager
+      node-type: master
+  template:
+    metadata:
+      labels:
+        app: wazuh-manager
+        node-type: master
+    spec:
+      # No workload talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 101
+
+      volumes:
+        # The Secret gets the pod's fsGroup and group read, so the service user
+        # could read it: an init container copies it to a root-only file.
+        - name: wazuh-credentials
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: wazuh-credentials-secret
+          secret:
+            secretName: manager-credentials
+            defaultMode: 0400
+        - name: wazuh-manager-certs-raw
+          secret:
+            secretName: manager-certs
+            defaultMode: 0400
+        - name: wazuh-manager-certs
+          emptyDir: {}
+        - name: wazuh-authd-pass
+          secret:
+            secretName: wazuh-authd-pass
+
+      initContainers:
+        - name: install-credentials
+          image: wazuh/wazuh-manager # tag is set in kustomization.yaml
+          command:
+            - /bin/sh
+            - -c
+            - umask 077 && cp /credentials-secret/wazuh-credentials /run/secrets/wazuh-credentials && chmod 0400 /run/secrets/wazuh-credentials
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+          volumeMounts:
+            - name: wazuh-credentials-secret
+              mountPath: /credentials-secret
+              readOnly: true
+            - name: wazuh-credentials
+              mountPath: /run/secrets
+
+        # Seeds etc/ and data/ on a fresh volume from the image, then installs
+        # the certificates with the owners and modes the manager expects.
+        - name: init-wazuh-etc
+          image: wazuh/wazuh-manager # tag is set in kustomization.yaml
+          command:
+            - /bin/sh
+            - -c
+            - |
+              if [ -z "$(ls -A /pvc-etc)" ]; then
+                cp -a /var/wazuh-manager/etc/* /pvc-etc/
+                chown root:101 /pvc-etc/certs
+                chmod 1770 /pvc-etc/certs
+              fi
+              # data/ is not in the image's permanent-data snapshot.
+              if [ -z "$(ls -A /pvc-data)" ]; then
+                cp -a /var/wazuh-manager/data/. /pvc-data/
+              fi
+              cp /tmp/certs-raw/root-ca.pem /etc/wazuh-certs-final/root-ca.pem
+              cp /tmp/certs-raw/manager.pem /etc/wazuh-certs-final/indexer-connector.pem
+              cp /tmp/certs-raw/manager-key.pem /etc/wazuh-certs-final/indexer-connector-key.pem
+              chown root:101 /etc/wazuh-certs-final/root-ca.pem /etc/wazuh-certs-final/indexer-connector.pem /etc/wazuh-certs-final/indexer-connector-key.pem
+              chmod 0640 /etc/wazuh-certs-final/root-ca.pem /etc/wazuh-certs-final/indexer-connector.pem /etc/wazuh-certs-final/indexer-connector-key.pem
+              # remoted reads the agent listener pair after dropping privileges,
+              # so it belongs to the manager user (101:101), not root:101.
+              cp /tmp/certs-raw/manager-remoted.pem /etc/wazuh-certs-final/remoted.pem
+              cp /tmp/certs-raw/manager-remoted-key.pem /etc/wazuh-certs-final/remoted-key.pem
+              chown 101:101 /etc/wazuh-certs-final/remoted.pem /etc/wazuh-certs-final/remoted-key.pem
+              chmod 0640 /etc/wazuh-certs-final/remoted.pem /etc/wazuh-certs-final/remoted-key.pem
+          volumeMounts:
+            - name: wazuh-manager-master
+              mountPath: /pvc-etc
+              subPath: wazuh/var/wazuh-manager/etc
+            - name: wazuh-manager-master
+              mountPath: /pvc-data
+              subPath: wazuh/var/wazuh-manager/data
+            - name: wazuh-manager-certs-raw
+              mountPath: /tmp/certs-raw
+            - name: wazuh-manager-certs
+              mountPath: /etc/wazuh-certs-final
+
+      containers:
+        - name: wazuh-manager
+          image: wazuh/wazuh-manager # tag is set in kustomization.yaml
+          env:
+            - name: WAZUH_INDEXER_HOSTS
+              value: wazuh-indexer-0.wazuh-indexer:9200,wazuh-indexer-1.wazuh-indexer:9200,wazuh-indexer-2.wazuh-indexer:9200
+            - name: WAZUH_NODE_NAME
+              value: master
+            - name: WAZUH_NODE_TYPE
+              value: master
+            - name: WAZUH_REMOTE_BIND_ADDR
+              value: "0.0.0.0"
+            - name: WAZUH_CLUSTER_BIND_ADDR
+              value: "0.0.0.0"
+            - name: WAZUH_CLUSTER_NODES
+              value: wazuh-manager-master-0.wazuh-cluster
+            - name: WAZUH_CLUSTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-cluster-key
+                  key: key
+
+          securityContext:
+            capabilities:
+              add: ["SYS_CHROOT"]
+
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+
+          ports:
+            - name: agents-https
+              containerPort: 1517
+            - name: registration
+              containerPort: 1515
+            - name: cluster
+              containerPort: 1516
+            - name: api
+              containerPort: 55000
+
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - /var/wazuh-manager/bin/wazuh-manager-control status 2>/dev/null | grep -qE 'not running|failed to start|refused its configuration' && exit 1 || exit 0
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - /var/wazuh-manager/bin/wazuh-manager-control status 2>/dev/null | grep -qE 'not running|failed to start|refused its configuration' && exit 1 || exit 0
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - /var/wazuh-manager/bin/wazuh-manager-control status 2>/dev/null | grep -qE 'not running|failed to start|refused its configuration' && exit 1 || exit 0
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          # One volume, split by subPath, so configuration, agent keys, queues
+          # and logs survive pod restarts.
+          volumeMounts:
+            - name: wazuh-credentials
+              mountPath: /run/secrets
+              readOnly: true
+            - name: wazuh-authd-pass
+              mountPath: /wazuh-config-mount/etc/authd.pass
+              subPath: authd.pass
+              readOnly: true
+            - name: wazuh-manager-master
+              mountPath: /var/wazuh-manager/api/configuration
+              subPath: wazuh/var/wazuh-manager/api/configuration
+            - name: wazuh-manager-master
+              mountPath: /var/wazuh-manager/etc
+              subPath: wazuh/var/wazuh-manager/etc
+            - name: wazuh-manager-certs
+              mountPath: /var/wazuh-manager/etc/certs/root-ca.pem
+              subPath: root-ca.pem
+            - name: wazuh-manager-certs
+              mountPath: /var/wazuh-manager/etc/certs/indexer-connector.pem
+              subPath: indexer-connector.pem
+            - name: wazuh-manager-certs
+              mountPath: /var/wazuh-manager/etc/certs/indexer-connector-key.pem
+              subPath: indexer-connector-key.pem
+            - name: wazuh-manager-certs
+              mountPath: /var/wazuh-manager/etc/certs/remoted.pem
+              subPath: remoted.pem
+            - name: wazuh-manager-certs
+              mountPath: /var/wazuh-manager/etc/certs/remoted-key.pem
+              subPath: remoted-key.pem
+            - name: wazuh-manager-master
+              mountPath: /var/wazuh-manager/logs
+              subPath: wazuh/var/wazuh-manager/logs
+            - name: wazuh-manager-master
+              mountPath: /var/wazuh-manager/queue
+              subPath: wazuh/var/wazuh-manager/queue
+            - name: wazuh-manager-master
+              mountPath: /var/wazuh-manager/var/multigroups
+              subPath: wazuh/var/wazuh-manager/var/multigroups
+            - name: wazuh-manager-master
+              mountPath: /var/wazuh-manager/data
+              subPath: wazuh/var/wazuh-manager/data
+
+  volumeClaimTemplates:
+    - metadata:
+        name: wazuh-manager-master
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: wazuh-storage
+        resources:
+          requests:
+            storage: 50Gi

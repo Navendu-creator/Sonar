@@ -7,8 +7,10 @@ k8s/
 ├── kind/kind-config.yaml      # local single-node cluster ("sonar")
 ├── sonarqube/                 # namespace, secret, postgres, sonarqube
 ├── argocd/                    # Argo CD v3.5.5 install
-│   └── apps/sonarqube.yaml    # Argo CD Application that deploys k8s/sonarqube
-└── pipecd/                    # PipeCD production setup (see k8s/pipecd/README.md)
+│   ├── clusters/dev-cluster/  # registers the EKS cluster dev-cluster with Argo CD
+│   └── apps/wazuh.yaml        # Argo CD Application that deploys k8s/wazuh to dev-cluster
+├── pipecd/                    # PipeCD production setup (see k8s/pipecd/README.md)
+└── wazuh/                     # Wazuh 5 on EKS (see k8s/wazuh/README.md)
 ```
 
 ## Run locally with kind

@@ -1,0 +1,14 @@
+# Keep at least one worker receiving agent events during node drains and
+# cluster upgrades. The master is a single pod, so it gets no budget: a budget
+# that never allows an eviction would block every node drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: wazuh-manager-worker
+  namespace: wazuh
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: wazuh-manager
+      node-type: worker

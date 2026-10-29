@@ -1,0 +1,2 @@
+# Generated certificates and credentials (see secrets/create.sh). Never commit.
+.secrets/

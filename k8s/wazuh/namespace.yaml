@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wazuh
+  annotations:
+    # Deleting the Argo CD Application must not delete the namespace, and with
+    # it the out-of-git Secrets and the volume claims.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+  labels:
+    # The indexer's init container raises vm.max_map_count on the node, which
+    # needs a privileged container. Warn about anything short of "baseline".
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: baseline

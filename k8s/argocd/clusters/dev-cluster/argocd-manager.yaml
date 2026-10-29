@@ -1,0 +1,35 @@
+# The identity Argo CD (running on kind-sonar) uses on the EKS cluster
+# "dev-cluster". Applied to EKS by register.sh, not by Argo CD itself.
+# cluster-admin, as `argocd cluster add` grants: the apps it deploys create
+# namespaces, StorageClasses and cluster-wide RBAC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-manager
+  namespace: kube-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: argocd-manager
+    namespace: kube-system
+
+---
+# Long-lived token for the ServiceAccount (Argo CD on kind has no AWS identity,
+# so it cannot use IAM). Delete this Secret to revoke Argo CD's access.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argocd-manager-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: argocd-manager
+type: kubernetes.io/service-account-token

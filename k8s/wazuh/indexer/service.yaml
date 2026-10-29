@@ -1,0 +1,22 @@
+# Headless: gives every indexer pod a stable name
+# (wazuh-indexer-<n>.wazuh-indexer), which the certificates carry.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-indexer
+  namespace: wazuh
+  labels:
+    app: wazuh-indexer
+spec:
+  selector:
+    app: wazuh-indexer
+  ports:
+    - name: indexer-rest
+      port: 9200
+      targetPort: 9200
+    - name: indexer-nodes
+      port: 9300
+      targetPort: 9300
+  clusterIP: None
+  # The indexer nodes resolve each other before any of them is ready.
+  publishNotReadyAddresses: true

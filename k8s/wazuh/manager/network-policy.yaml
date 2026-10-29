@@ -1,0 +1,79 @@
+# Every manager sends alerts to the indexer and downloads threat intelligence
+# (CTI, vulnerability feeds) over HTTPS from the internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: manager-egress
+  namespace: wazuh
+spec:
+  podSelector:
+    matchLabels:
+      app: wazuh-manager
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: wazuh-indexer
+      ports:
+        - protocol: TCP
+          port: 9200
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# The master serves the API to the dashboard and the cluster port to the workers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: manager-master-ingress
+  namespace: wazuh
+spec:
+  podSelector:
+    matchLabels:
+      app: wazuh-manager
+      node-type: master
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wazuh-dashboard
+      ports:
+        - protocol: TCP
+          port: 55000
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wazuh-manager
+      ports:
+        - protocol: TCP
+          port: 1516
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: manager-worker-egress
+  namespace: wazuh
+spec:
+  podSelector:
+    matchLabels:
+      app: wazuh-manager
+      node-type: worker
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: wazuh-manager
+              node-type: master
+      ports:
+        - protocol: TCP
+          port: 1516
+        - protocol: TCP
+          port: 55000

@@ -1,0 +1,241 @@
+# Wazuh indexer (OpenSearch): three nodes, all cluster-manager eligible, so the
+# cluster survives losing one. Certificates and passwords come from the Secrets
+# that ../secrets/create.sh creates.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-indexer
+  namespace: wazuh
+spec:
+  # Changing this also means adding the new names to discovery.seed_hosts below,
+  # to WAZUH_INDEXER_HOSTS in the managers, and to the indexer certificate.
+  replicas: 3
+  serviceName: wazuh-indexer
+  # The nodes form a quorum and have to start together: under OrderedReady,
+  # wazuh-indexer-0 would wait forever for peers that are never created.
+  # Immutable: changing it later needs delete --cascade=orphan, then apply.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: wazuh-indexer
+  template:
+    metadata:
+      labels:
+        app: wazuh-indexer
+    spec:
+      # No workload talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 101
+
+      # One indexer per node, spread across AZs when possible: losing a node
+      # or a zone must not take two of the three quorum members with it.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: wazuh-indexer
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: wazuh-indexer
+
+      volumes:
+        # The Secret gets the pod's fsGroup and group read, so the service user
+        # could read it: an init container copies it to a root-only file.
+        - name: wazuh-credentials
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: wazuh-credentials-secret
+          secret:
+            secretName: indexer-credentials
+            defaultMode: 0400
+        - name: indexer-certs
+          secret:
+            secretName: indexer-certs
+            defaultMode: 0600
+
+      initContainers:
+        - name: install-credentials
+          image: wazuh/wazuh-indexer # tag is set in kustomization.yaml
+          command:
+            - /bin/sh
+            - -c
+            - umask 077 && cp /credentials-secret/wazuh-credentials /run/secrets/wazuh-credentials && chmod 0400 /run/secrets/wazuh-credentials
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+          volumeMounts:
+            - name: wazuh-credentials-secret
+              mountPath: /credentials-secret
+              readOnly: true
+            - name: wazuh-credentials
+              mountPath: /run/secrets
+
+        # A fresh EBS volume is owned by root; the indexer runs as uid 101.
+        - name: volume-permissions
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 101:101 /var/lib/wazuh-indexer"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+          volumeMounts:
+            - name: wazuh-indexer
+              mountPath: /var/lib/wazuh-indexer
+
+        # OpenSearch refuses to start below 262144. The sysctl is node-wide,
+        # so only ever raise it; never lower a higher value already set.
+        - name: init-sysctl
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              [ "$(sysctl -n vm.max_map_count)" -lt 262144 ] && sysctl -w vm.max_map_count=262144
+              exit 0
+          securityContext:
+            privileged: true
+
+      containers:
+        - name: wazuh-indexer
+          image: wazuh/wazuh-indexer # tag is set in kustomization.yaml
+          env:
+            # Half of the memory limit goes to the JVM heap; the rest is
+            # left to the OS page cache, which OpenSearch relies on.
+            - name: OPENSEARCH_JAVA_OPTS
+              value: -Xms2g -Xmx2g -Dlog4j2.formatMsgNoLookups=true
+            - name: bootstrap.memory_lock
+              value: "false"
+            - name: network.host
+              value: "0.0.0.0"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Keep below POD_NAME and POD_NAMESPACE: $(VAR) expands backwards only.
+            # The nodes verify each other's certificate against this name.
+            - name: network.publish_host
+              value: $(POD_NAME).wazuh-indexer.$(POD_NAMESPACE).svc.cluster.local
+            - name: node.name
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: cluster.initial_cluster_manager_nodes
+              value: wazuh-indexer-0,wazuh-indexer-1,wazuh-indexer-2
+            - name: discovery.seed_hosts
+              value: wazuh-indexer-0.wazuh-indexer,wazuh-indexer-1.wazuh-indexer,wazuh-indexer-2.wazuh-indexer
+            - name: node.max_local_storage_nodes
+              value: "3"
+            - name: plugins.security.allow_default_init_securityindex
+              value: "true"
+            # Must match the subject of the indexer certificate in secrets/create.sh.
+            - name: NODES_DN
+              value: CN=indexer,OU=Wazuh,O=Wazuh,L=California,C=US
+            - name: DISCOVERY_SERVICE
+              value: wazuh-indexer
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+          securityContext:
+            capabilities:
+              add: ["SYS_CHROOT"]
+
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+
+          ports:
+            - name: indexer-rest
+              containerPort: 9200
+            - name: indexer-nodes
+              containerPort: 9300
+
+          # The security plugin reports UP once the node has joined a cluster and
+          # loaded its security index; a first start can take a few minutes.
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - curl -fks https://localhost:9200/_plugins/_security/health | grep -q '"status":"UP"'
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - curl -fks https://localhost:9200/_plugins/_security/health | grep -q '"status":"UP"'
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - curl -fks https://localhost:9200/_plugins/_security/health | grep -q '"status":"UP"'
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+
+          volumeMounts:
+            - name: wazuh-credentials
+              mountPath: /run/secrets
+              readOnly: true
+            - name: wazuh-indexer
+              mountPath: /var/lib/wazuh-indexer
+            - name: indexer-certs
+              mountPath: /usr/share/wazuh-indexer/config/certs/indexer-key.pem
+              subPath: indexer-key.pem
+              readOnly: true
+            - name: indexer-certs
+              mountPath: /usr/share/wazuh-indexer/config/certs/indexer.pem
+              subPath: indexer.pem
+              readOnly: true
+            - name: indexer-certs
+              mountPath: /usr/share/wazuh-indexer/config/certs/root-ca.pem
+              subPath: root-ca.pem
+              readOnly: true
+            - name: indexer-certs
+              mountPath: /usr/share/wazuh-indexer/config/certs/admin.pem
+              subPath: admin.pem
+              readOnly: true
+            - name: indexer-certs
+              mountPath: /usr/share/wazuh-indexer/config/certs/admin-key.pem
+              subPath: admin-key.pem
+              readOnly: true
+
+  # Alert indices grow with agent count and retention; gp3 volumes can be
+  # expanded later by editing the PersistentVolumeClaims.
+  volumeClaimTemplates:
+    - metadata:
+        name: wazuh-indexer
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: wazuh-storage
+        resources:
+          requests:
+            storage: 100Gi

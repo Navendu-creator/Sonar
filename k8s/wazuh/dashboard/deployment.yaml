@@ -1,0 +1,159 @@
+# Wazuh dashboard. Serves HTTPS only, with the internal CA's certificate;
+# users reach it through the ALB in ../ingress/dashboard-ingress.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wazuh-dashboard
+  namespace: wazuh
+spec:
+  replicas: 1
+
+  # ReadWriteOnce volume: the old pod must release it before the new one starts.
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: wazuh-dashboard
+
+  template:
+    metadata:
+      labels:
+        app: wazuh-dashboard
+    spec:
+      # No workload talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 101
+
+      volumes:
+        # The Secret gets the pod's fsGroup and group read, so the service user
+        # could read it: an init container copies it to a root-only file.
+        - name: wazuh-credentials
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: wazuh-credentials-secret
+          secret:
+            secretName: dashboard-credentials
+            defaultMode: 0400
+        - name: dashboard-config
+          persistentVolumeClaim:
+            claimName: wazuh-dashboard-config
+        - name: dashboard-certs
+          secret:
+            secretName: dashboard-certs
+
+      initContainers:
+        - name: install-credentials
+          image: wazuh/wazuh-dashboard # tag is set in kustomization.yaml
+          command:
+            - /bin/sh
+            - -c
+            - umask 077 && cp /credentials-secret/wazuh-credentials /run/secrets/wazuh-credentials && chmod 0400 /run/secrets/wazuh-credentials
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+          volumeMounts:
+            - name: wazuh-credentials-secret
+              mountPath: /credentials-secret
+              readOnly: true
+            - name: wazuh-credentials
+              mountPath: /run/secrets
+
+        # Seeds the config directory on a fresh volume from the image.
+        - name: init-dashboard-config
+          image: wazuh/wazuh-dashboard # tag is set in kustomization.yaml
+          command:
+            - /bin/sh
+            - -c
+            - |
+              if [ ! -f /pvc-config/opensearch_dashboards.yml ]; then
+                cp -a /usr/share/wazuh-dashboard/config/. /pvc-config/
+              fi
+          volumeMounts:
+            - name: dashboard-config
+              mountPath: /pvc-config
+              subPath: config
+
+      containers:
+        - name: wazuh-dashboard
+          image: wazuh/wazuh-dashboard # tag is set in kustomization.yaml
+          env:
+            - name: OPENSEARCH_HOSTS
+              value: https://wazuh-indexer:9200
+            - name: SERVER_SSL_ENABLED
+              value: "true"
+            - name: SERVER_SSL_CERTIFICATE
+              value: /usr/share/wazuh-dashboard/config/certs/dashboard.pem
+            - name: SERVER_SSL_KEY
+              value: /usr/share/wazuh-dashboard/config/certs/dashboard-key.pem
+            - name: OPENSEARCH_SSL_CERTIFICATE_AUTHORITIES
+              value: /usr/share/wazuh-dashboard/config/certs/root-ca.pem
+            - name: WAZUH_API_URL
+              value: https://wazuh-api
+
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+
+          ports:
+            - name: dashboard
+              containerPort: 443
+
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - curl -k -s -o /dev/null https://localhost:443/app/login
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - curl -kfsS -o /dev/null https://localhost:443/app/login
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - curl -k -s -o /dev/null https://localhost:443/app/login
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          volumeMounts:
+            - name: wazuh-credentials
+              mountPath: /run/secrets
+              readOnly: true
+            - name: dashboard-config
+              mountPath: /usr/share/wazuh-dashboard/config
+              subPath: config
+            - name: dashboard-certs
+              mountPath: /usr/share/wazuh-dashboard/config/certs/dashboard.pem
+              subPath: dashboard.pem
+              readOnly: true
+            - name: dashboard-certs
+              mountPath: /usr/share/wazuh-dashboard/config/certs/dashboard-key.pem
+              subPath: dashboard-key.pem
+              readOnly: true
+            - name: dashboard-certs
+              mountPath: /usr/share/wazuh-dashboard/config/certs/root-ca.pem
+              subPath: root-ca.pem
+              readOnly: true

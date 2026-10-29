@@ -1,0 +1,40 @@
+# Wazuh dashboard behind an internet-facing NLB, created by the AWS Load
+# Balancer Controller, reached on its AWS DNS name. ACM cannot issue a
+# certificate for an *.elb.amazonaws.com name, so the NLB passes TLS through
+# and browsers see the dashboard's own certificate, signed by the internal CA in
+# .secrets/certs/root-ca.pem (trust it in the browser, or accept the warning).
+#
+# The NLB's DNS name must be in DASHBOARD_HOSTNAMES when running
+# ../secrets/create.sh. Once you have a domain and an ACM certificate, switch to
+# dashboard-ingress.yaml instead (see kustomization.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-dashboard-lb
+  namespace: wazuh
+  labels:
+    app: wazuh-dashboard
+  annotations:
+    # A recreated NLB gets a new DNS name; never let Argo CD delete this one.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    # Route straight to the pod IPs (requires the VPC CNI, the EKS default).
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    # The dashboard then sees the NLB's private IPs as the source, which is
+    # what network-policy.yaml in this folder allows.
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: preserve_client_ip.enabled=false
+spec:
+  type: LoadBalancer
+  # Handled by the AWS Load Balancer Controller, not the legacy in-tree provider.
+  loadBalancerClass: service.k8s.aws/nlb
+  # This is the SIEM console: open it only to your office / VPN ranges.
+  # loadBalancerSourceRanges:
+  #   - 203.0.113.0/24
+  selector:
+    app: wazuh-dashboard
+  ports:
+    - name: dashboard
+      protocol: TCP
+      port: 443
+      targetPort: 443

@@ -1,0 +1,91 @@
+# In-cluster Services of the Wazuh manager. Agents outside the cluster reach
+# port 1517 through the NLB in ../ingress/agents-nlb.yaml instead.
+
+# Headless: the manager nodes find the master as wazuh-manager-master-0.wazuh-cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-cluster
+  namespace: wazuh
+  labels:
+    app: wazuh-manager
+spec:
+  selector:
+    app: wazuh-manager
+  ports:
+    - name: cluster
+      port: 1516
+      targetPort: 1516
+  clusterIP: None
+
+---
+# Wazuh API, used by the dashboard. Only the master serves it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-api
+  namespace: wazuh
+  labels:
+    app: wazuh-manager
+spec:
+  selector:
+    app: wazuh-manager
+    node-type: master
+  ports:
+    - name: api
+      port: 55000
+      targetPort: 55000
+
+---
+# Wazuh 5.x agents: enrollment and events over one HTTPS channel, served by
+# remoted on every manager node.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-agents
+  namespace: wazuh
+  labels:
+    app: wazuh-manager
+spec:
+  selector:
+    app: wazuh-manager
+  ports:
+    - name: agents-https
+      port: 1517
+      targetPort: 1517
+
+---
+# Wazuh 4.x agents: events (legacy remoted), on the workers.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-events
+  namespace: wazuh
+  labels:
+    app: wazuh-manager
+spec:
+  selector:
+    app: wazuh-manager
+    node-type: worker
+  ports:
+    - name: agents-events
+      port: 1514
+      targetPort: 1514
+
+---
+# Wazuh 4.x agents: enrollment (authd), on the master.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-registration
+  namespace: wazuh
+  labels:
+    app: wazuh-manager
+spec:
+  selector:
+    app: wazuh-manager
+    node-type: master
+  ports:
+    - name: registration
+      port: 1515
+      targetPort: 1515

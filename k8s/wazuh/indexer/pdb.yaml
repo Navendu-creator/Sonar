@@ -1,0 +1,11 @@
+# Drain one indexer at a time: two of three must stay up to keep a quorum.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: wazuh-indexer
+  namespace: wazuh
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: wazuh-indexer

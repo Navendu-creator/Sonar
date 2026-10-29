@@ -1,0 +1,39 @@
+# Wazuh 5.x agents connect on 1517 (enrollment and events over HTTPS). An
+# Ingress only carries HTTP, and agents must see the manager's own certificate
+# end to end, so this is a plain TCP pass-through NLB, created by the AWS Load
+# Balancer Controller and spread over every manager pod.
+#
+# Agents dial this NLB's DNS name (or a domain of yours pointing at it); that
+# name must be in AGENT_HOSTNAMES when running ../secrets/create.sh, or agents
+# reject the certificate. Deleting this Service gives the NLB a new name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-agents-lb
+  namespace: wazuh
+  labels:
+    app: wazuh-manager
+  annotations:
+    # A recreated NLB gets a new DNS name; never let Argo CD delete this one.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    # Route straight to the pod IPs (requires the VPC CNI, the EKS default).
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    # The managers then see the NLB's private IPs as the source, which is what
+    # network-policy.yaml in this folder allows.
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: preserve_client_ip.enabled=false
+spec:
+  type: LoadBalancer
+  # Handled by the AWS Load Balancer Controller, not the legacy in-tree provider.
+  loadBalancerClass: service.k8s.aws/nlb
+  # Restrict to the networks your agents connect from, if they are known.
+  # loadBalancerSourceRanges:
+  #   - 203.0.113.0/24
+  selector:
+    app: wazuh-manager
+  ports:
+    - name: agents-https
+      protocol: TCP
+      port: 1517
+      targetPort: 1517
