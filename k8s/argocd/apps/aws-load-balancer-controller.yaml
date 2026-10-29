@@ -1,0 +1,69 @@
+# Installs the AWS Load Balancer Controller on the EKS cluster "dev-cluster".
+# It creates the Wazuh NLBs (and later the ALB), so sync it before wazuh.yaml.
+#
+# Its IAM role and Pod Identity association (for the service account
+# kube-system/aws-load-balancer-controller) come from Terraform in
+# infra-setup/terraform/aws (modules/kubernetes, enable_lb_controller_iam).
+# Apply that first, or the controller cannot call the AWS APIs.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aws-load-balancer-controller
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://aws.github.io/eks-charts
+    chart: aws-load-balancer-controller
+    # Chart and controller versions match since v3. When bumping the minor
+    # version, also refresh lb-controller-iam-policy.json in infra-setup.
+    targetRevision: 3.6.2
+    helm:
+      releaseName: aws-load-balancer-controller
+      valuesObject:
+        clusterName: dev-cluster
+        # Set explicitly so the controller does not depend on reaching IMDS from a pod.
+        region: us-east-1
+        vpcId: vpc-09298799c697e0a10 # terraform output vpc_id (infra-setup, dev)
+        serviceAccount:
+          name: aws-load-balancer-controller # must match the Pod Identity association
+        # The Wazuh Services set loadBalancerClass themselves. Without this
+        # webhook, a stopped controller cannot block Service creation cluster-wide.
+        enableServiceMutatorWebhook: false
+
+  destination:
+    name: dev-cluster # the cluster Secret register.sh creates
+    namespace: kube-system
+
+  # The chart generates a new webhook CA and certificate on every render
+  # (Argo CD cannot use Helm's lookup to reuse them). Keep the ones on the
+  # cluster, so the app does not stay OutOfSync and the cert never mismatches.
+  ignoreDifferences:
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      name: aws-load-balancer-webhook
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      name: aws-load-balancer-webhook
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+    - kind: Secret
+      name: aws-load-balancer-tls
+      jsonPointers:
+        - /data
+
+  syncPolicy:
+    automated:
+      prune: true     # delete resources removed from git
+      selfHeal: true  # revert manual kubectl changes
+    syncOptions:
+      - RespectIgnoreDifferences=true # also keep them when syncing
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
