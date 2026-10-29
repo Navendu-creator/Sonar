@@ -135,12 +135,13 @@ spec:
               add: ["SYS_CHROOT"]
 
           resources:
+            # Sized to share a 2 vCPU / 8 GiB node with an indexer.
             requests:
-              cpu: "1"
-              memory: 2Gi
+              cpu: 500m
+              memory: 1536Mi
             limits:
               cpu: "2"
-              memory: 4Gi
+              memory: 2Gi
 
           ports:
             - name: agents-https
@@ -232,4 +233,4 @@ spec:
         storageClassName: wazuh-storage
         resources:
           requests:
-            storage: 50Gi
+            storage: 10Gi

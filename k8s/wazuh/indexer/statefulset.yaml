@@ -114,7 +114,7 @@ spec:
             # Half of the memory limit goes to the JVM heap; the rest is
             # left to the OS page cache, which OpenSearch relies on.
             - name: OPENSEARCH_JAVA_OPTS
-              value: -Xms2g -Xmx2g -Dlog4j2.formatMsgNoLookups=true
+              value: -Xms1536m -Xmx1536m -Dlog4j2.formatMsgNoLookups=true
             - name: bootstrap.memory_lock
               value: "false"
             - name: network.host
@@ -158,12 +158,13 @@ spec:
               add: ["SYS_CHROOT"]
 
           resources:
+            # Sized to share a 2 vCPU / 8 GiB node with a manager.
             requests:
-              cpu: "1"
-              memory: 4Gi
+              cpu: 500m
+              memory: 3Gi
             limits:
               cpu: "2"
-              memory: 4Gi
+              memory: 3Gi
 
           ports:
             - name: indexer-rest
@@ -238,4 +239,4 @@ spec:
         storageClassName: wazuh-storage
         resources:
           requests:
-            storage: 100Gi
+            storage: 30Gi

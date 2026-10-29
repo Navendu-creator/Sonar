@@ -19,8 +19,8 @@ Once you have a domain, see [Switching to a domain](#switching-to-a-domain).
 k8s/wazuh/
 ├── kustomization.yaml       # image tags (one place to bump the version)
 ├── namespace.yaml, storage-class.yaml (gp3, encrypted, Retain), network-policy.yaml (default deny)
-├── indexer/                 # 3-node OpenSearch quorum, 100Gi each, one pod per node
-├── manager/                 # 1 master (API) + 2 workers, 50Gi each
+├── indexer/                 # 3-node OpenSearch quorum, 30Gi each, one pod per node
+├── manager/                 # 1 master (API) + 2 workers, 10Gi each
 ├── dashboard/               # Wazuh dashboard
 ├── ingress/                 # NLBs for the dashboard (443) and agents (1517); ALB Ingress for later
 └── secrets/create.sh        # certificates, passwords and Secrets, kept in .secrets/ (gitignored)
@@ -32,11 +32,19 @@ k8s/wazuh/
 
 ## Prerequisites on the cluster
 
+On `dev-cluster` these come from Terraform in
+[infra-setup](https://github.com/Navendu-creator/infra-setup) (`terraform/aws/environments/dev`),
+except the controller itself, which Argo CD installs.
+
 - **At least 3 worker nodes**, ideally in 3 AZs. Each indexer needs its own node.
-  Total requests are about 6.5 vCPU / 19 GiB, so plan on 3× `m6i.xlarge` (4 vCPU, 16 GiB) or larger.
+  Requests are sized for 3× `m7i-flex.large` (2 vCPU / 8 GiB, the largest AWS Free plan type):
+  about 3.25 vCPU / 14.5 GiB in total, at most 1.25 vCPU / 5.5 GiB per node. That suits a small
+  number of agents. For real load, move to 4 vCPU / 16 GiB nodes and raise the indexer to
+  1 CPU / 4 GiB (2 GB heap) and the managers to 1 CPU / 2 GiB.
 - **[EBS CSI driver](https://docs.aws.amazon.com/eks/latest/userguide/ebs-csi.html)** add-on, with its IAM role.
 - **[AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/)**,
-  which creates the NLBs (and later the ALB).
+  which creates the NLBs (and later the ALB). Its IAM role is in Terraform; the chart is
+  [k8s/argocd/apps/aws-load-balancer-controller.yaml](../argocd/apps/aws-load-balancer-controller.yaml).
 - **Network policy enforcement** in the VPC CNI (`enableNetworkPolicy: "true"` in the add-on config).
   Without it, the NetworkPolicies here are silently ignored.
 - Public subnets tagged `kubernetes.io/role/elb=1`, so the controller can place internet-facing LBs.
@@ -56,25 +64,29 @@ Argo CD on `kind-sonar`, through [k8s/argocd/apps/wazuh.yaml](../argocd/apps/waz
 
 The certificates must carry the NLB DNS names, and AWS only assigns those when the NLBs
 are created. Argo CD therefore syncs everything first; the Wazuh pods wait in
-`ContainerCreating` until step 4 creates their Secrets, then start on their own.
+`ContainerCreating` until step 5 creates their Secrets, then start on their own.
 
 ```bash
 # 1. Register the EKS cluster with Argo CD (adds the kubeconfig context dev-cluster-731372490312)
 k8s/argocd/clusters/dev-cluster/register.sh
 EKS=dev-cluster-731372490312
 
-# 2. Push k8s/wazuh to GitHub main (Argo CD deploys what is there), then create the Application
+# 2. Install the AWS Load Balancer Controller and wait for it
+kubectl --context kind-sonar apply -f k8s/argocd/apps/aws-load-balancer-controller.yaml
+kubectl --context $EKS -n kube-system rollout status deploy/aws-load-balancer-controller --timeout=5m
+
+# 3. Push k8s/wazuh to GitHub main (Argo CD deploys what is there), then create the Application
 kubectl --context kind-sonar apply -f k8s/argocd/apps/wazuh.yaml
 
-# 3. Wait for the NLBs' DNS names
+# 4. Wait for the NLBs' DNS names
 kubectl --context $EKS -n wazuh get svc wazuh-agents-lb wazuh-dashboard-lb -w   # until EXTERNAL-IP is set
 AGENTS_LB=$(kubectl --context $EKS -n wazuh get svc wazuh-agents-lb -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 DASHBOARD_LB=$(kubectl --context $EKS -n wazuh get svc wazuh-dashboard-lb -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
-# 4. Certificates, passwords and Secrets (stored in k8s/wazuh/.secrets/ — back this up)
+# 5. Certificates, passwords and Secrets (stored in k8s/wazuh/.secrets/ — back this up)
 KUBE_CONTEXT=$EKS AGENT_HOSTNAMES=$AGENTS_LB DASHBOARD_HOSTNAMES=$DASHBOARD_LB k8s/wazuh/secrets/create.sh
 
-# 5. Wait for it (indexers first; the first start takes several minutes)
+# 6. Wait for it (indexers first; the first start takes several minutes)
 kubectl --context $EKS -n wazuh rollout status sts/wazuh-indexer --timeout=15m
 kubectl --context $EKS -n wazuh rollout status sts/wazuh-manager-master sts/wazuh-manager-worker --timeout=10m
 kubectl --context $EKS -n wazuh rollout status deploy/wazuh-dashboard --timeout=10m
