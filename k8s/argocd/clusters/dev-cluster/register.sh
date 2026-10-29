@@ -29,7 +29,12 @@ fi
 read -r endpoint ca < <(aws eks describe-cluster --name "$CLUSTER" --region "$REGION" \
   --query 'cluster.[endpoint, certificateAuthority.data]' --output text)
 
+# update-kubeconfig also makes the new context current; put the old one back so
+# later plain `kubectl` commands do not land on EKS by surprise.
+previous_context=$(kubectl config current-context 2>/dev/null || true)
 aws eks update-kubeconfig --name "$CLUSTER" --region "$REGION" --alias "$EKS_CONTEXT" >/dev/null
+[[ -n $previous_context ]] && kubectl config use-context "$previous_context" >/dev/null
+
 kubectl --context "$EKS_CONTEXT" apply -f "$DIR/argocd-manager.yaml"
 
 # The token controller fills the Secret in a moment after it is created.
