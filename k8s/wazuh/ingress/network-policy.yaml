@@ -1,6 +1,6 @@
 # Lets the load balancers in: to the dashboard (443) and to the agent port
 # (1517). They target pod IPs and connect from their own private addresses in
-# the VPC, so the private ranges are allowed; narrow them to your VPC CIDR.
+# the VPC, so the CIDR of dev-cluster's VPC (terraform output vpc_id) is allowed.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -13,9 +13,7 @@ spec:
   policyTypes: ["Ingress"]
   ingress:
     - from:
-        - ipBlock: { cidr: 10.0.0.0/8 }
-        - ipBlock: { cidr: 172.16.0.0/12 }
-        - ipBlock: { cidr: 192.168.0.0/16 }
+        - ipBlock: { cidr: 10.0.0.0/16 }
       ports:
         - protocol: TCP
           port: 443
@@ -33,9 +31,7 @@ spec:
   policyTypes: ["Ingress"]
   ingress:
     - from:
-        - ipBlock: { cidr: 10.0.0.0/8 }
-        - ipBlock: { cidr: 172.16.0.0/12 }
-        - ipBlock: { cidr: 192.168.0.0/16 }
+        - ipBlock: { cidr: 10.0.0.0/16 }
       ports:
         - protocol: TCP
           port: 1517

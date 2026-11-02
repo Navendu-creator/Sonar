@@ -25,7 +25,7 @@ spec:
         clusterName: dev-cluster
         # Set explicitly so the controller does not depend on reaching IMDS from a pod.
         region: us-east-1
-        vpcId: vpc-09298799c697e0a10 # terraform output vpc_id (infra-setup, dev)
+        vpcId: vpc-059492cc9d7d7fc1f # terraform output vpc_id (infra-setup, dev)
         serviceAccount:
           name: aws-load-balancer-controller # must match the Pod Identity association
         # The Wazuh Services set loadBalancerClass themselves. Without this

@@ -35,11 +35,11 @@ resources:
 
 # All three components must run the same version. Bump the three tags together,
 # and read the upgrade notes first: https://github.com/wazuh/wazuh-kubernetes/releases
-# 5.0.0-rc1 is the newest 5.x build; move to 5.0.0 once it is released.
+# 5.0.0-rc2 is the newest 5.x build; move to 5.0.0 once it is released.
 images:
   - name: wazuh/wazuh-indexer
-    newTag: 5.0.0-rc1
+    newTag: 5.0.0-rc2
   - name: wazuh/wazuh-manager
-    newTag: 5.0.0-rc1
+    newTag: 5.0.0-rc2
   - name: wazuh/wazuh-dashboard
-    newTag: 5.0.0-rc1
+    newTag: 5.0.0-rc2

@@ -1,7 +1,7 @@
 # Wazuh 5 on EKS
 
 Production Wazuh cluster deployed with Kustomize, adapted from the official
-[wazuh-kubernetes](https://github.com/wazuh/wazuh-kubernetes) EKS overlay (tag `v5.0.0-rc1`).
+[wazuh-kubernetes](https://github.com/wazuh/wazuh-kubernetes) EKS overlay (tag `v5.0.0-rc2`).
 
 ```
   users ─── NLB :443  (TCP pass-through) ──► wazuh-dashboard ─────────────────┐
@@ -26,9 +26,11 @@ k8s/wazuh/
 └── secrets/create.sh        # certificates, passwords and Secrets, kept in .secrets/ (gitignored)
 ```
 
-> **Version.** Wazuh 5.0 is at release candidate stage: `5.0.0-rc1` is the newest
+> **Version.** Wazuh 5.0 is at release candidate stage: `5.0.0-rc2` is the newest
 > 5.x build and there is no GA `5.0.0` yet. When it ships, change the three tags in
 > `kustomization.yaml` and diff these manifests against the upstream `v5.0.0` tag.
+> Do not bump a tag alone: `rc2` moved the manager's configuration and certificates,
+> so the manifests had to change with it.
 
 ## Prerequisites on the cluster
 
@@ -37,6 +39,7 @@ On `dev-cluster` these come from Terraform in
 except the controller itself, which Argo CD installs.
 
 - **At least 3 worker nodes**, ideally in 3 AZs. Each indexer needs its own node.
+  `dev-cluster` has 3 nodes in 2 AZs (2 in `us-east-1a`), so losing `us-east-1a` loses the indexer quorum.
   Requests are sized for 3× `m7i-flex.large` (2 vCPU / 8 GiB, the largest AWS Free plan type):
   about 3.25 vCPU / 14.5 GiB in total, at most 1.25 vCPU / 5.5 GiB per node. That suits a small
   number of agents. For real load, move to 4 vCPU / 16 GiB nodes and raise the indexer to
@@ -55,7 +58,7 @@ except the controller itself, which Argo CD installs.
 | --- | --- |
 | `ingress/dashboard-nlb.yaml` → `loadBalancerSourceRanges` | Office / VPN ranges allowed to reach the dashboard (recommended) |
 | `ingress/agents-nlb.yaml` → `loadBalancerSourceRanges` | Networks agents connect from, if known |
-| `ingress/network-policy.yaml` | Narrow the private ranges to your VPC CIDR |
+| `ingress/network-policy.yaml` | Set to the VPC CIDR of `dev-cluster` (`10.0.0.0/16`); change it if the VPC changes |
 
 ## Deploy (Argo CD)
 
@@ -64,29 +67,32 @@ Argo CD on `kind-sonar`, through [k8s/argocd/apps/wazuh.yaml](../argocd/apps/waz
 
 The certificates must carry the NLB DNS names, and AWS only assigns those when the NLBs
 are created. Argo CD therefore syncs everything first; the Wazuh pods wait in
-`ContainerCreating` until step 5 creates their Secrets, then start on their own.
+`ContainerCreating` until step 6 creates their Secrets, then start on their own.
 
 ```bash
-# 1. Register the EKS cluster with Argo CD (adds the kubeconfig context dev-cluster-731372490312)
+# 1. Merge k8s/wazuh to GitHub main FIRST. Argo CD deploys what is there, and an
+#    existing wazuh Application starts syncing as soon as step 2 reaches the cluster.
+
+# 2. Register the EKS cluster with Argo CD (adds the kubeconfig context dev-cluster-731372490312)
 k8s/argocd/clusters/dev-cluster/register.sh
 EKS=dev-cluster-731372490312
 
-# 2. Install the AWS Load Balancer Controller and wait for it
+# 3. Install the AWS Load Balancer Controller and wait for it
 kubectl --context kind-sonar apply -f k8s/argocd/apps/aws-load-balancer-controller.yaml
 kubectl --context $EKS -n kube-system rollout status deploy/aws-load-balancer-controller --timeout=5m
 
-# 3. Push k8s/wazuh to GitHub main (Argo CD deploys what is there), then create the Application
+# 4. Create the Application
 kubectl --context kind-sonar apply -f k8s/argocd/apps/wazuh.yaml
 
-# 4. Wait for the NLBs' DNS names
+# 5. Wait for the NLBs' DNS names
 kubectl --context $EKS -n wazuh get svc wazuh-agents-lb wazuh-dashboard-lb -w   # until EXTERNAL-IP is set
 AGENTS_LB=$(kubectl --context $EKS -n wazuh get svc wazuh-agents-lb -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 DASHBOARD_LB=$(kubectl --context $EKS -n wazuh get svc wazuh-dashboard-lb -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
-# 5. Certificates, passwords and Secrets (stored in k8s/wazuh/.secrets/ — back this up)
+# 6. Certificates, passwords and Secrets (stored in k8s/wazuh/.secrets/ — back this up)
 KUBE_CONTEXT=$EKS AGENT_HOSTNAMES=$AGENTS_LB DASHBOARD_HOSTNAMES=$DASHBOARD_LB k8s/wazuh/secrets/create.sh
 
-# 6. Wait for it (indexers first; the first start takes several minutes)
+# 7. Wait for it (indexers first; the first start takes several minutes)
 kubectl --context $EKS -n wazuh rollout status sts/wazuh-indexer --timeout=15m
 kubectl --context $EKS -n wazuh rollout status sts/wazuh-manager-master sts/wazuh-manager-worker --timeout=10m
 kubectl --context $EKS -n wazuh rollout status deploy/wazuh-dashboard --timeout=10m
@@ -106,6 +112,22 @@ To generate the files without touching the cluster, run `secrets/create.sh --gen
 > `kubectl delete -k`) gives the NLB a new DNS name. The certificates, and every enrolled
 > agent, then point at a name that no longer exists. Both Services, and the namespace, are
 > annotated so that Argo CD never prunes them, even if the Application is deleted.
+
+## Rebuilding the cluster
+
+A new `dev-cluster` has a new API endpoint, VPC and load balancers, so before following
+[Deploy](#deploy-argo-cd) again:
+
+- Set `vpcId` in [aws-load-balancer-controller.yaml](../argocd/apps/aws-load-balancer-controller.yaml)
+  and the CIDR in `ingress/network-policy.yaml` from the new VPC.
+- Delete `k8s/wazuh/.secrets/`. Its certificates carry the old NLB names, and the new, empty
+  volumes take whatever passwords they are given first.
+
+To tear a cluster down, first delete the two NLB Services (`kubectl --context $EKS -n wazuh delete
+svc wazuh-agents-lb wazuh-dashboard-lb`, after removing the Argo CD Application so it does not
+recreate them). Argo CD never deletes them, and a leftover NLB blocks deleting the VPC. The
+`wazuh-storage` volumes use `Retain`, so they outlive the cluster and keep costing money; delete
+them in EC2 once the data is no longer needed.
 
 ## Enroll an agent
 
@@ -130,7 +152,7 @@ and enrolls any number of agents.
 
 - **Secrets are set once.** Each component keeps the passwords it was first started with. Re-running
   `create.sh` reuses what is in `.secrets/` and never rotates. To rotate a password, follow the upstream
-  [credentials guide](https://github.com/wazuh/wazuh-kubernetes/blob/v5.0.0-rc1/docs/ref/credentials.md).
+  [credentials guide](https://github.com/wazuh/wazuh-kubernetes/blob/v5.0.0-rc2/docs/ref/credentials.md).
 - **Adding a hostname.** For agents, delete `.secrets/certs/manager-remoted*.pem`, re-run `create.sh` with all
   the names in `AGENT_HOSTNAMES`, then `kubectl --context $EKS -n wazuh rollout restart sts/wazuh-manager-master sts/wazuh-manager-worker`.
   For the dashboard, do the same with `.secrets/certs/dashboard*.pem`, `DASHBOARD_HOSTNAMES` and
@@ -140,7 +162,8 @@ and enrolls any number of agents.
 - **Disk.** Volumes use `Retain` and can be grown in place by editing the PVC's `storage` request. Set an
   index retention policy (ISM) in the dashboard, or the indexer volumes eventually fill up.
 - **4.x agents** still work inside the cluster (`wazuh-events` :1514, `wazuh-registration` :1515). To accept
-  them from outside, add those ports to an NLB and to `ingress/network-policy.yaml`.
+  them from outside, add those ports to an NLB and to `ingress/network-policy.yaml`. The master generates their
+  enrollment password on first start: `/etc/wazuh-manager/authd.pass`.
 - **Agents inside the cluster** (e.g. a DaemonSet in another namespace) are blocked by the default-deny policy.
   Allow their namespace to port 1517 in `ingress/network-policy.yaml`.
 

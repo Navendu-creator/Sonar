@@ -6,7 +6,6 @@
 #   indexer-credentials, manager-credentials,
 #   dashboard-credentials                          passwords each component starts with
 #   wazuh-cluster-key                              shared key of the manager cluster (1516)
-#   wazuh-authd-pass                               enrollment password of 4.x agents (1515)
 #
 # Usage:
 #   KUBE_CONTEXT=dev-cluster-731372490312 \
@@ -25,9 +24,9 @@
 # passwords they were first started with, and every certificate hangs off the
 # CA in .secrets/certs/, so losing .secrets/ means losing both: back it up.
 #
-# The certificates mirror what wazuh-certs-tool.sh 5.0 issues (subjects,
-# key usages, SANs); it is not used directly because its 5.0.0-rc1 build cannot
-# yet issue the agent listener certificate the 5.0 manager needs.
+# The certificates mirror what wazuh-certs-tool.sh 5.0.0-rc2 issues (subjects,
+# key usages, SANs); it is not used directly because it has to run as root and,
+# until 5.0.0 ships, comes from Wazuh's pre-release staging site.
 set -euo pipefail
 
 NS=wazuh
@@ -59,10 +58,12 @@ chmod 700 "$SECRETS"
 if [[ ! -s "$CERTS/root-ca.pem" ]]; then
   openssl req -x509 -new -nodes -newkey rsa:4096 -sha256 -days 3650 \
     -keyout "$CERTS/root-ca.key" -out "$CERTS/root-ca.pem" \
-    -subj '/OU=Wazuh/O=Wazuh/L=California/' 2>/dev/null
+    -subj '/OU=Wazuh/O=Wazuh/L=California/' \
+    -addext 'basicConstraints=critical,CA:TRUE' \
+    -addext 'keyUsage=critical,keyCertSign,cRLSign' 2>/dev/null
 fi
 
-# issue <name> <subject> <extendedKeyUsage> [<dns>...]
+# issue <name> <subject> <extendedKeyUsage> [<dns or ip>...]
 # Writes $CERTS/<name>.pem and <name>-key.pem, signed by the root CA, unless
 # they already exist. -preserveDN keeps the subject in the order given: the
 # indexer compares DNs as strings. notBefore is backdated one day so a peer
@@ -74,7 +75,13 @@ issue() {
 
   local tmp san=""
   tmp=$(mktemp -d)
-  for dns in "$@"; do san+="${san:+,}DNS:$dns"; done
+  for name_or_ip in "$@"; do
+    if [[ $name_or_ip =~ ^[0-9.]+$ || $name_or_ip == *:* ]]; then
+      san+="${san:+,}IP:$name_or_ip"
+    else
+      san+="${san:+,}DNS:$name_or_ip"
+    fi
+  done
 
   cat > "$tmp/ca.cnf" <<EOF
 [ ca ]
@@ -144,6 +151,14 @@ if [[ ! -s "$CERTS/manager-remoted.pem" ]]; then
   cat "$CERTS/root-ca.pem" >> "$CERTS/manager-remoted.pem"
 fi
 
+# Server API (apid, 55000): the manager no longer generates this itself and
+# refuses to start without it. The dashboard verifies it as https://wazuh-api.
+if [[ ! -s "$CERTS/manager-apid.pem" ]]; then
+  issue manager-apid '/C=US/L=California/O=Wazuh/OU=Wazuh/CN=manager' 'serverAuth' \
+    manager "${manager_dns[@]}" localhost 127.0.0.1 ::1
+  cat "$CERTS/root-ca.pem" >> "$CERTS/manager-apid.pem"
+fi
+
 # Dashboard: what browsers see through the pass-through NLB, so it carries the
 # names they open. To add a name later, delete dashboard*.pem and run again.
 IFS=, read -ra dashboard_dns <<< "${DASHBOARD_HOSTNAMES:-}"
@@ -175,7 +190,6 @@ gen_password WAZUH_MANAGER_WUI_PASSWORD
 # The cluster key must be exactly 32 alphanumeric characters, or every manager
 # refuses to start.
 [[ -s "$PASSWORDS/cluster-key" ]] || openssl rand -hex 16 | tr -d '\n' > "$PASSWORDS/cluster-key"
-[[ -s "$PASSWORDS/authd-pass" ]] || openssl rand -hex 24 | tr -d '\n' > "$PASSWORDS/authd-pass"
 
 # env_file <component> <key>...: the KEY=value file each component reads.
 env_file() {
@@ -210,6 +224,7 @@ apply_secret indexer-certs \
 apply_secret manager-certs \
   --from-file="$CERTS/manager.pem" --from-file="$CERTS/manager-key.pem" \
   --from-file="$CERTS/manager-remoted.pem" --from-file="$CERTS/manager-remoted-key.pem" \
+  --from-file="$CERTS/manager-apid.pem" --from-file="$CERTS/manager-apid-key.pem" \
   --from-file="$CERTS/root-ca.pem"
 apply_secret dashboard-certs \
   --from-file="$CERTS/dashboard.pem" --from-file="$CERTS/dashboard-key.pem" \
@@ -220,6 +235,5 @@ apply_secret manager-credentials --from-file=wazuh-credentials="$SECRETS/manager
 apply_secret dashboard-credentials --from-file=wazuh-credentials="$SECRETS/dashboard.env"
 
 apply_secret wazuh-cluster-key --from-file=key="$PASSWORDS/cluster-key"
-apply_secret wazuh-authd-pass --from-file=authd.pass="$PASSWORDS/authd-pass"
 
 echo "Dashboard login is 'admin'; its password is in $PASSWORDS/WAZUH_INDEXER_ADMIN_PASSWORD"

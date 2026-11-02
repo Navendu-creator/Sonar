@@ -1,5 +1,5 @@
 # Wazuh dashboard. Serves HTTPS only, with the internal CA's certificate;
-# users reach it through the ALB in ../ingress/dashboard-ingress.yaml.
+# users reach it through the NLB in ../ingress/dashboard-nlb.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,12 +23,18 @@ spec:
     spec:
       # No workload talks to the Kubernetes API.
       automountServiceAccountToken: false
+
+      # No fsGroup: kubelet would make the configuration claim group-writable,
+      # and the dashboard refuses a configuration directory that is. The image
+      # binds 443 as its service user.
       securityContext:
-        fsGroup: 101
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: "443"
 
       volumes:
-        # The Secret gets the pod's fsGroup and group read, so the service user
-        # could read it: an init container copies it to a root-only file.
+        # A Secret volume holds symbolic links: an init container copies the
+        # credentials to a regular file that only root can read.
         - name: wazuh-credentials
           emptyDir:
             medium: Memory
@@ -40,9 +46,12 @@ spec:
         - name: dashboard-config
           persistentVolumeClaim:
             claimName: wazuh-dashboard-config
-        - name: dashboard-certs
+        - name: dashboard-certs-raw
           secret:
             secretName: dashboard-certs
+            defaultMode: 0400
+        - name: dashboard-certs
+          emptyDir: {}
 
       initContainers:
         - name: install-credentials
@@ -81,6 +90,30 @@ spec:
               mountPath: /pvc-config
               subPath: config
 
+        # Regular files, never the Secret's symbolic links, root:wazuh-dashboard
+        # 0640. One CA for the deployment, for the indexer and the Server API.
+        - name: install-certs
+          image: wazuh/wazuh-dashboard # tag is set in kustomization.yaml
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              certs=/certs-final
+              install -o 0 -g 101 -m 0640 /tmp/certs-raw/dashboard.pem "${certs}/dashboard.pem"
+              install -o 0 -g 101 -m 0640 /tmp/certs-raw/dashboard-key.pem "${certs}/dashboard-key.pem"
+              install -o 0 -g 101 -m 0640 /tmp/certs-raw/root-ca.pem "${certs}/indexer-ca.pem"
+              install -o 0 -g 101 -m 0640 /tmp/certs-raw/root-ca.pem "${certs}/manager-ca.pem"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+          volumeMounts:
+            - name: dashboard-certs-raw
+              mountPath: /tmp/certs-raw
+              readOnly: true
+            - name: dashboard-certs
+              mountPath: /certs-final
+
       containers:
         - name: wazuh-dashboard
           image: wazuh/wazuh-dashboard # tag is set in kustomization.yaml
@@ -94,9 +127,11 @@ spec:
             - name: SERVER_SSL_KEY
               value: /usr/share/wazuh-dashboard/config/certs/dashboard-key.pem
             - name: OPENSEARCH_SSL_CERTIFICATE_AUTHORITIES
-              value: /usr/share/wazuh-dashboard/config/certs/root-ca.pem
+              value: /usr/share/wazuh-dashboard/config/certs/indexer-ca.pem
             - name: WAZUH_API_URL
               value: https://wazuh-api
+            - name: WAZUH_API_CA
+              value: /usr/share/wazuh-dashboard/config/certs/manager-ca.pem
 
           resources:
             requests:
@@ -154,6 +189,10 @@ spec:
               subPath: dashboard-key.pem
               readOnly: true
             - name: dashboard-certs
-              mountPath: /usr/share/wazuh-dashboard/config/certs/root-ca.pem
-              subPath: root-ca.pem
+              mountPath: /usr/share/wazuh-dashboard/config/certs/indexer-ca.pem
+              subPath: indexer-ca.pem
+              readOnly: true
+            - name: dashboard-certs
+              mountPath: /usr/share/wazuh-dashboard/config/certs/manager-ca.pem
+              subPath: manager-ca.pem
               readOnly: true
